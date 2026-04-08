@@ -33,8 +33,20 @@ jobs:
 
           KST = timezone(timedelta(hours=9))
           now_kst = datetime.now(KST)
-          yesterday = (now_kst - timedelta(days=1)).date()
-          report_date_text = yesterday.strftime("%Y-%m-%d")
+
+          target_date = (now_kst - timedelta(days=1)).date()
+          report_date_text = target_date.strftime("%Y-%m-%d")
+
+          yesterday_start = datetime.combine(
+              target_date,
+              datetime.min.time(),
+              tzinfo=KST
+          )
+          yesterday_end = datetime.combine(
+              target_date,
+              datetime.max.time(),
+              tzinfo=KST
+          )
 
           CATEGORIES = [
               {
@@ -43,20 +55,52 @@ jobs:
                   "queries": [
                       "국내 게임업계 동향",
                       "국내 게임사 전략",
-                      "국내 상장 게임사 OR 넥슨 OR 넷마블 OR 엔씨소프트 OR 크래프톤 OR 카카오게임즈 OR 스마일게이트 OR 네오위즈 OR 게임빌 OR 펄어비스 OR 컴투스 OR 웹젠 OR 베이글코드 OR 시프트업 OR 데브시스터즈 OR 미투온 OR 엠게임",
-                      "국내 게임산업 정책 OR 국내 게임 규제",
-                      "게임사",
-                      "게임 복지"
+                      "국내 상장 게임사",
+                      "넥슨",
+                      "넷마블",
+                      "엔씨소프트",
+                      "크래프톤",
+                      "카카오게임즈",
+                      "스마일게이트",
+                      "네오위즈",
+                      "게임빌",
+                      "펄어비스",
+                      "컴투스",
+                      "웹젠",
+                      "베이글코드",
+                      "시프트업",
+                      "데브시스터즈",
+                      "미투온",
+                      "엠게임",
+                      "국내 게임산업 정책",
+                      "국내 게임 규제",
+                      "게임사 복지"
                   ]
               },
               {
                   "title": "노동정책",
                   "emoji": "⚖️",
                   "queries": [
-                      "노동정책 OR 노동법 개정 OR 고용노동부",
-                      "근무제도 OR 유연근무 OR 주52시간",
-                      "노동 분쟁 OR 노동 판례 OR 부당해고",
-                      "게임업계 노동 OR IT업계 노동 OR 포괄임금"
+                      "노동법개정",
+                      "노동법 개정",
+                      "근로기준법 개정",
+                      "고용노동부",
+                      "유연근무",
+                      "주52시간",
+                      "노동 판례",
+                      "부당해고",
+                      "포괄임금",
+                      "IT업계 노동",
+                      "게임업계 노동",
+                      "육아휴직",
+                      "출산휴가",
+                      "배우자출산휴가",
+                      "난임치료휴가",
+                      "가족돌봄휴가",
+                      "가족돌봄휴직",
+                      "모성보호",
+                      "임신기 근로시간 단축",
+                      "출산전후휴가"
                   ]
               }
           ]
@@ -86,13 +130,13 @@ jobs:
               except Exception:
                   return None
 
-          def is_yesterday(pubdate_str):
+          def is_target_date(pubdate_str):
               dt = parse_pubdate(pubdate_str)
               if not dt:
                   return False
-              return dt.date() == yesterday
+              return yesterday_start <= dt <= yesterday_end
 
-          def search_news(query, display=20):
+          def search_news(query, display=50):
               encoded_query = urllib.parse.quote(query)
               url = (
                   "https://openapi.naver.com/v1/search/news.json"
@@ -107,10 +151,11 @@ jobs:
 
           def collect_category_news(category):
               seen_links = set()
+              seen_titles = set()
               collected = []
 
               for query in category["queries"]:
-                  items = search_news(query, display=20)
+                  items = search_news(query, display=50)
 
                   for item in items:
                       title = clean_text(item.get("title", ""))
@@ -121,16 +166,20 @@ jobs:
                       if not title or not link:
                           continue
 
-                      if link in seen_links:
+                      if not is_target_date(pubdate_str):
                           continue
 
-                      if not is_yesterday(pubdate_str):
+                      normalized_title = re.sub(r"\s+", " ", title).strip()
+
+                      if link in seen_links or normalized_title in seen_titles:
                           continue
 
                       pub_dt = parse_pubdate(pubdate_str)
                       pub_text = pub_dt.strftime("%Y-%m-%d %H:%M") if pub_dt else ""
 
                       seen_links.add(link)
+                      seen_titles.add(normalized_title)
+
                       collected.append({
                           "title": title,
                           "desc": shorten(desc, 100),
