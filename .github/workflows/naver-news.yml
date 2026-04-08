@@ -3,7 +3,7 @@ name: Naver News to Slack
 on:
   workflow_dispatch:
   schedule:
-    - cron: "5 0 * * *"
+    - cron: "0 8 * * *"
 
 jobs:
   send-news:
@@ -31,20 +31,21 @@ jobs:
           SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
           SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
 
-          # 한국 시간
           KST = timezone(timedelta(hours=9))
           today_text = datetime.now(KST).strftime("%Y-%m-%d")
 
-          # 카테고리별 검색어
           CATEGORIES = [
               {
                   "title": "게임회사 동향",
                   "emoji": "🎮",
                   "queries": [
-                      "게임업계 동향",
-                      "게임사 실적 OR 게임사 투자 OR 게임사 전략",
-                      "상장 게임사 OR 경쟁 게임사",
-                      "게임산업 정책 OR 게임 규제"
+                      "국내 게임업계 동향",
+                      "국내 게임사 전략",
+                      "국내 상장 게임사 OR 넥슨 OR 넷마블 OR 엔씨소프트 OR 크래프톤 OR 카카오게임즈 OR 스마일게이트 OR 네오위즈 OR 게임빌 OR 펄어비스 OR NC OR 컴투스
+                       OR 웹젠 OR 베이글코드 OR 엔서스 OR 시프트업 OR 데브시스터즈 OR 미투온 OR 엠게임 OR 게임 스타트",
+                      "국내 게임산업 정책 OR 국내 게임 규제",
+                      "게임사",
+                      "게임 복지"
                   ]
               },
               {
@@ -72,12 +73,12 @@ jobs:
               text = re.sub(r"\s+", " ", text).strip()
               return text
 
-          def shorten(text, limit=120):
+          def shorten(text, limit=100):
               if len(text) <= limit:
                   return text
               return text[:limit - 3] + "..."
 
-          def search_news(query, display=5):
+          def search_news(query, display=10):
               encoded_query = urllib.parse.quote(query)
               url = (
                   "https://openapi.naver.com/v1/search/news.json"
@@ -95,14 +96,17 @@ jobs:
               collected = []
 
               for query in category["queries"]:
-                  items = search_news(query, display=4)
+                  items = search_news(query, display=10)
 
                   for item in items:
                       title = clean_text(item.get("title", ""))
                       desc = clean_text(item.get("description", ""))
                       link = item.get("originallink") or item.get("link") or ""
 
-                      if not link or link in seen_links:
+                      if not title or not link:
+                          continue
+
+                      if link in seen_links:
                           continue
 
                       seen_links.add(link)
@@ -113,8 +117,7 @@ jobs:
                           "query": query
                       })
 
-                      # 카테고리당 최대 5개만
-                      if len(collected) >= 5:
+                      if len(collected) >= 10:
                           return collected
 
               return collected
@@ -122,7 +125,6 @@ jobs:
           def build_blocks(results_by_category):
               blocks = []
 
-              # 헤더
               blocks.append({
                   "type": "header",
                   "text": {
@@ -135,19 +137,18 @@ jobs:
                   "type": "section",
                   "text": {
                       "type": "mrkdwn",
-                      "text": "*게임회사 동향*과 *노동정책* 관련 뉴스를 카테고리별로 정리했어요."
+                      "text": "*국내 게임회사 동향*과 *노동정책* 관련 뉴스를 정리했어요."
                   }
               })
 
               blocks.append({"type": "divider"})
 
               for category in results_by_category:
-                  title = f"{category['emoji']} {category['title']}"
                   blocks.append({
                       "type": "section",
                       "text": {
                           "type": "mrkdwn",
-                          "text": f"*{title}*"
+                          "text": f"*{category['emoji']} {category['title']}*"
                       }
                   })
 
@@ -163,7 +164,7 @@ jobs:
                       continue
 
                   for idx, item in enumerate(category["items"], start=1):
-                      text = (
+                      block_text = (
                           f"*{idx}. <{item['link']}|{item['title']}>*\n"
                           f"{item['desc']}\n"
                           f"`검색어: {item['query']}`"
@@ -172,7 +173,7 @@ jobs:
                           "type": "section",
                           "text": {
                               "type": "mrkdwn",
-                              "text": text
+                              "text": block_text
                           }
                       })
 
@@ -200,7 +201,6 @@ jobs:
                   "items": items
               })
 
-          # 알림용 fallback 텍스트
           fallback_lines = [f"오늘의 뉴스 브리핑 | {today_text}"]
           for category in results_by_category:
               fallback_lines.append(f"[{category['title']}]")
@@ -210,6 +210,7 @@ jobs:
                   for idx, item in enumerate(category["items"], start=1):
                       fallback_lines.append(f"{idx}. {item['title']} - {item['link']}")
               fallback_lines.append("")
+
           fallback_text = "\n".join(fallback_lines)
 
           payload = {
