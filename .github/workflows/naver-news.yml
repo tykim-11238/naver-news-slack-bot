@@ -109,9 +109,10 @@ jobs:
               {
                   "title": "휴직·모성보호",
                   "emoji": "👶",
-                  "max_items": 5,
+                  "max_items": 10,
                   "max_per_query": 2,
                   "queries": [
+                      "휴직",
                       "육아휴직",
                       "모성보호",
                       "출산휴가",
@@ -120,17 +121,26 @@ jobs:
                       "임신기 근로시간 단축",
                       "난임치료휴가",
                       "가족돌봄휴가",
-                      "가족돌봄휴직",
-                      "휴직"
+                      "가족돌봄휴직"
                   ],
                   "must_keywords": [
-                      "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
-                      "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
-                      "가족돌봄휴가", "가족돌봄휴직", "휴직"
+                      "휴직",
+                      "육아휴직",
+                      "모성보호",
+                      "출산휴가",
+                      "배우자출산휴가",
+                      "출산전후휴가",
+                      "임신기 근로시간 단축",
+                      "난임치료휴가",
+                      "가족돌봄휴가",
+                      "가족돌봄휴직"
                   ],
                   "exclude_keywords": []
               }
           ]
+
+          MAX_BLOCKS = 45
+          MAX_SECTION_TEXT = 2800
 
           def request_json(url, headers=None):
               req = urllib.request.Request(url, headers=headers or {})
@@ -145,7 +155,7 @@ jobs:
               text = re.sub(r"\s+", " ", text).strip()
               return text
 
-          def shorten(text, limit=90):
+          def shorten(text, limit=80):
               if len(text) <= limit:
                   return text
               return text[: limit - 3] + "..."
@@ -158,10 +168,10 @@ jobs:
 
           def tokenize_title(text):
               normalized = normalize_text(text)
-              return set([token for token in normalized.split() if len(token) >= 2])
+              return set(token for token in normalized.split() if len(token) >= 2)
 
           def is_similar_title(normalized_title, seen_title_tokens_list, threshold=3):
-              current_tokens = set([token for token in normalized_title.split() if len(token) >= 2])
+              current_tokens = set(token for token in normalized_title.split() if len(token) >= 2)
               if not current_tokens:
                   return False
               for seen_tokens in seen_title_tokens_list:
@@ -208,7 +218,6 @@ jobs:
                       return -1
 
               score = 0
-
               for keyword in must_keywords:
                   kw = keyword.lower()
                   if kw in title_n:
@@ -220,10 +229,8 @@ jobs:
 
           def collect_category_news(category, global_seen_links, global_seen_titles, global_seen_title_tokens):
               candidates = []
-              per_query_counts = {}
 
               for query in category["queries"]:
-                  per_query_counts[query] = 0
                   items = search_news(query, display=30)
 
                   for item in items:
@@ -234,7 +241,6 @@ jobs:
 
                       if not title or not link:
                           continue
-
                       if not is_target_date(pubdate_str):
                           continue
 
@@ -242,10 +248,8 @@ jobs:
 
                       if link in global_seen_links:
                           continue
-
                       if normalized_title and normalized_title in global_seen_titles:
                           continue
-
                       if normalized_title and is_similar_title(normalized_title, global_seen_title_tokens, threshold=3):
                           continue
 
@@ -259,7 +263,7 @@ jobs:
 
                       candidates.append({
                           "title": title,
-                          "desc": shorten(desc, 90),
+                          "desc": shorten(desc, 80),
                           "link": link,
                           "query": query,
                           "pub_text": pub_text,
@@ -270,29 +274,24 @@ jobs:
                       })
 
               candidates.sort(
-                  key=lambda x: (
-                      -x["score"],
-                      -x["pub_timestamp"],
-                      x["title"]
-                  )
+                  key=lambda x: (-x["score"], -x["pub_timestamp"], x["title"])
               )
 
               selected = []
+              per_query_counts = {}
               max_items = category["max_items"]
               max_per_query = category.get("max_per_query", max_items)
 
               for item in candidates:
                   query = item["query"]
+                  current_count = per_query_counts.get(query, 0)
 
-                  if per_query_counts.get(query, 0) >= max_per_query:
+                  if current_count >= max_per_query:
                       continue
-
                   if item["link"] in global_seen_links:
                       continue
-
                   if item["normalized_title"] and item["normalized_title"] in global_seen_titles:
                       continue
-
                   if item["normalized_title"] and is_similar_title(item["normalized_title"], global_seen_title_tokens, threshold=3):
                       continue
 
@@ -301,7 +300,7 @@ jobs:
                       global_seen_titles.add(item["normalized_title"])
                       global_seen_title_tokens.append(item["title_tokens"])
 
-                  per_query_counts[query] = per_query_counts.get(query, 0) + 1
+                  per_query_counts[query] = current_count + 1
 
                   selected.append({
                       "title": item["title"],
@@ -316,36 +315,60 @@ jobs:
 
               return selected
 
+          def make_article_line(idx, item):
+              return (
+                  f"*{idx}. <{item['link']}|{item['title']}>*\n"
+                  f"{item['desc']}\n"
+                  f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
+              )
+
+          def split_text_chunks(lines, max_len=MAX_SECTION_TEXT):
+              chunks = []
+              current = ""
+
+              for line in lines:
+                  piece = line if not current else "\n\n" + line
+                  if len(current) + len(piece) <= max_len:
+                      current += piece
+                  else:
+                      if current:
+                          chunks.append(current)
+                      current = line
+
+              if current:
+                  chunks.append(current)
+
+              return chunks
+
           def build_blocks(results_by_category):
-              blocks = []
+              blocks = [
+                  {
+                      "type": "header",
+                      "text": {
+                          "type": "plain_text",
+                          "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
+                      }
+                  },
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": (
+                              f"*{report_date_text} 작성 기사 기준*으로 "
+                              f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
+                          )
+                      }
+                  },
+                  {"type": "divider"}
+              ]
 
-              blocks.append({
-                  "type": "header",
-                  "text": {
-                      "type": "plain_text",
-                      "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
-                  }
-              })
-
-              blocks.append({
-                  "type": "section",
-                  "text": {
-                      "type": "mrkdwn",
-                      "text": (
-                          f"*{report_date_text} 작성 기사 기준*으로 "
-                          f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
-                      )
-                  }
-              })
-
-              blocks.append({"type": "divider"})
-
-              for category in results_by_category:
+              for c_idx, category in enumerate(results_by_category):
+                  title_line = f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"
                   blocks.append({
                       "type": "section",
                       "text": {
                           "type": "mrkdwn",
-                          "text": f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"
+                          "text": title_line
                       }
                   })
 
@@ -357,24 +380,24 @@ jobs:
                               "text": "전날 기준 관련 뉴스를 찾지 못했어요."
                           }
                       })
+                  else:
+                      article_lines = [
+                          make_article_line(idx, item)
+                          for idx, item in enumerate(category["items"], start=1)
+                      ]
+                      chunks = split_text_chunks(article_lines, max_len=MAX_SECTION_TEXT)
+
+                      for chunk in chunks:
+                          blocks.append({
+                              "type": "section",
+                              "text": {
+                                  "type": "mrkdwn",
+                                  "text": chunk
+                              }
+                          })
+
+                  if c_idx < len(results_by_category) - 1:
                       blocks.append({"type": "divider"})
-                      continue
-
-                  for idx, item in enumerate(category["items"], start=1):
-                      block_text = (
-                          f"*{idx}. <{item['link']}|{item['title']}>*\n"
-                          f"{item['desc']}\n"
-                          f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
-                      )
-                      blocks.append({
-                          "type": "section",
-                          "text": {
-                              "type": "mrkdwn",
-                              "text": block_text
-                          }
-                      })
-
-                  blocks.append({"type": "divider"})
 
               blocks.append({
                   "type": "context",
@@ -385,6 +408,11 @@ jobs:
                       }
                   ]
               })
+
+              if len(blocks) > MAX_BLOCKS:
+                  raise RuntimeError(
+                      f"Slack block count too high: {len(blocks)} blocks generated"
+                  )
 
               return blocks
 
@@ -421,7 +449,7 @@ jobs:
 
           payload = {
               "channel": SLACK_CHANNEL_ID,
-              "text": "\n".join(fallback_lines),
+              "text": "\n".join(fallback_lines[:120]),
               "blocks": build_blocks(results_by_category)
           }
 
