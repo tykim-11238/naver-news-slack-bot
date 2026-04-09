@@ -110,8 +110,9 @@ jobs:
                   "title": "휴직·모성보호",
                   "emoji": "👶",
                   "max_items": 15,
-                  "max_per_query": 2,
+                  "max_per_query": 3,
                   "queries": [
+                      "휴직",
                       "육아휴직",
                       "모성보호",
                       "출산휴가",
@@ -120,13 +121,19 @@ jobs:
                       "임신기 근로시간 단축",
                       "난임치료휴가",
                       "가족돌봄휴가",
-                      "가족돌봄휴직",
-                      "휴직"
+                      "가족돌봄휴직"
                   ],
                   "must_keywords": [
-                      "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
-                      "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
-                      "가족돌봄휴가", "가족돌봄휴직", "휴직"
+                      "휴직",
+                      "육아휴직",
+                      "모성보호",
+                      "출산휴가",
+                      "배우자출산휴가",
+                      "출산전후휴가",
+                      "임신기 근로시간 단축",
+                      "난임치료휴가",
+                      "가족돌봄휴가",
+                      "가족돌봄휴직"
                   ],
                   "exclude_keywords": []
               }
@@ -158,10 +165,10 @@ jobs:
 
           def tokenize_title(text):
               normalized = normalize_text(text)
-              return set([token for token in normalized.split() if len(token) >= 2])
+              return set(token for token in normalized.split() if len(token) >= 2)
 
           def is_similar_title(normalized_title, seen_title_tokens_list, threshold=3):
-              current_tokens = set([token for token in normalized_title.split() if len(token) >= 2])
+              current_tokens = set(token for token in normalized_title.split() if len(token) >= 2)
               if not current_tokens:
                   return False
               for seen_tokens in seen_title_tokens_list:
@@ -208,7 +215,6 @@ jobs:
                       return -1
 
               score = 0
-
               for keyword in must_keywords:
                   kw = keyword.lower()
                   if kw in title_n:
@@ -220,10 +226,8 @@ jobs:
 
           def collect_category_news(category, global_seen_links, global_seen_titles, global_seen_title_tokens):
               candidates = []
-              per_query_counts = {}
 
               for query in category["queries"]:
-                  per_query_counts[query] = 0
                   items = search_news(query, display=30)
 
                   for item in items:
@@ -278,13 +282,15 @@ jobs:
               )
 
               selected = []
+              per_query_counts = {}
               max_items = category["max_items"]
               max_per_query = category.get("max_per_query", max_items)
 
               for item in candidates:
                   query = item["query"]
+                  current_count = per_query_counts.get(query, 0)
 
-                  if per_query_counts.get(query, 0) >= max_per_query:
+                  if current_count >= max_per_query:
                       continue
 
                   if item["link"] in global_seen_links:
@@ -301,7 +307,7 @@ jobs:
                       global_seen_titles.add(item["normalized_title"])
                       global_seen_title_tokens.append(item["title_tokens"])
 
-                  per_query_counts[query] = per_query_counts.get(query, 0) + 1
+                  per_query_counts[query] = current_count + 1
 
                   selected.append({
                       "title": item["title"],
