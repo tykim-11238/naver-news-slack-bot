@@ -44,6 +44,7 @@ jobs:
                   "title": "게임회사 동향",
                   "emoji": "🎮",
                   "max_items": 15,
+                  "max_per_query": 2,
                   "queries": [
                       "국내 게임업계 동향",
                       "국내 상장 게임사",
@@ -65,7 +66,7 @@ jobs:
                   ],
                   "must_keywords": [
                       "게임", "게임사", "게임업계", "상장", "실적", "신작", "출시",
-                      "투자", "인수", "합병", "규제", "정책", "개발", "출시", "론칭",
+                      "투자", "인수", "합병", "규제", "정책", "개발", "론칭",
                       "넥슨", "넷마블", "엔씨소프트", "크래프톤", "카카오게임즈",
                       "시프트업", "펄어비스", "컴투스", "웹젠", "네오위즈",
                       "스마일게이트", "데브시스터즈", "엠게임", "미투온", "베이글코드"
@@ -80,6 +81,7 @@ jobs:
                   "title": "노동 일반",
                   "emoji": "⚖️",
                   "max_items": 15,
+                  "max_per_query": 3,
                   "queries": [
                       "노동법개정",
                       "노동법 개정",
@@ -108,6 +110,7 @@ jobs:
                   "title": "휴직·모성보호",
                   "emoji": "👶",
                   "max_items": 5,
+                  "max_per_query": 2,
                   "queries": [
                       "육아휴직",
                       "모성보호",
@@ -145,13 +148,26 @@ jobs:
           def shorten(text, limit=90):
               if len(text) <= limit:
                   return text
-              return text[:limit - 3] + "..."
+              return text[: limit - 3] + "..."
 
           def normalize_text(text):
               text = clean_text(text).lower()
-              text = re.sub(r"[^0-9a-zA-Z가-힣\s]", "", text)
+              text = re.sub(r"[^0-9a-zA-Z가-힣\s]", " ", text)
               text = re.sub(r"\s+", " ", text).strip()
               return text
+
+          def tokenize_title(text):
+              normalized = normalize_text(text)
+              return set([token for token in normalized.split() if len(token) >= 2])
+
+          def is_similar_title(normalized_title, seen_title_tokens_list, threshold=3):
+              current_tokens = set([token for token in normalized_title.split() if len(token) >= 2])
+              if not current_tokens:
+                  return False
+              for seen_tokens in seen_title_tokens_list:
+                  if len(current_tokens & seen_tokens) >= threshold:
+                      return True
+              return False
 
           def parse_pubdate(pubdate_str):
               try:
@@ -202,10 +218,12 @@ jobs:
 
               return score
 
-          def collect_category_news(category, global_seen_links, global_seen_titles):
+          def collect_category_news(category, global_seen_links, global_seen_titles, global_seen_title_tokens):
               candidates = []
+              per_query_counts = {}
 
               for query in category["queries"]:
+                  per_query_counts[query] = 0
                   items = search_news(query, display=30)
 
                   for item in items:
@@ -228,11 +246,15 @@ jobs:
                       if normalized_title and normalized_title in global_seen_titles:
                           continue
 
+                      if normalized_title and is_similar_title(normalized_title, global_seen_title_tokens, threshold=3):
+                          continue
+
                       score = score_article(category, title, desc)
                       if score <= 0:
                           continue
 
                       pub_dt = parse_pubdate(pubdate_str)
+                      pub_timestamp = pub_dt.timestamp() if pub_dt else 0
                       pub_text = pub_dt.strftime("%Y-%m-%d %H:%M") if pub_dt else ""
 
                       candidates.append({
@@ -241,33 +263,45 @@ jobs:
                           "link": link,
                           "query": query,
                           "pub_text": pub_text,
+                          "pub_timestamp": pub_timestamp,
                           "score": score,
-                          "normalized_title": normalized_title
+                          "normalized_title": normalized_title,
+                          "title_tokens": tokenize_title(title)
                       })
 
-              candidates = sorted(
-                  candidates,
+              candidates.sort(
                   key=lambda x: (
                       -x["score"],
-                      x["pub_text"],
+                      -x["pub_timestamp"],
                       x["title"]
-                  ),
-                  reverse=False
+                  )
               )
 
               selected = []
               max_items = category["max_items"]
+              max_per_query = category.get("max_per_query", max_items)
 
               for item in candidates:
+                  query = item["query"]
+
+                  if per_query_counts.get(query, 0) >= max_per_query:
+                      continue
+
                   if item["link"] in global_seen_links:
                       continue
 
                   if item["normalized_title"] and item["normalized_title"] in global_seen_titles:
                       continue
 
+                  if item["normalized_title"] and is_similar_title(item["normalized_title"], global_seen_title_tokens, threshold=3):
+                      continue
+
                   global_seen_links.add(item["link"])
                   if item["normalized_title"]:
                       global_seen_titles.add(item["normalized_title"])
+                      global_seen_title_tokens.append(item["title_tokens"])
+
+                  per_query_counts[query] = per_query_counts.get(query, 0) + 1
 
                   selected.append({
                       "title": item["title"],
@@ -356,10 +390,16 @@ jobs:
 
           global_seen_links = set()
           global_seen_titles = set()
+          global_seen_title_tokens = []
           results_by_category = []
 
           for category in CATEGORIES:
-              items = collect_category_news(category, global_seen_links, global_seen_titles)
+              items = collect_category_news(
+                  category,
+                  global_seen_links,
+                  global_seen_titles,
+                  global_seen_title_tokens
+              )
               results_by_category.append({
                   "title": category["title"],
                   "emoji": category["emoji"],
