@@ -109,10 +109,9 @@ jobs:
               {
                   "title": "휴직·모성보호",
                   "emoji": "👶",
-                  "max_items": 15,
-                  "max_per_query": 3,
+                  "max_items": 5,
+                  "max_per_query": 2,
                   "queries": [
-                      "휴직",
                       "육아휴직",
                       "모성보호",
                       "출산휴가",
@@ -121,19 +120,13 @@ jobs:
                       "임신기 근로시간 단축",
                       "난임치료휴가",
                       "가족돌봄휴가",
-                      "가족돌봄휴직"
+                      "가족돌봄휴직",
+                      "휴직"
                   ],
                   "must_keywords": [
-                      "휴직",
-                      "육아휴직",
-                      "모성보호",
-                      "출산휴가",
-                      "배우자출산휴가",
-                      "출산전후휴가",
-                      "임신기 근로시간 단축",
-                      "난임치료휴가",
-                      "가족돌봄휴가",
-                      "가족돌봄휴직"
+                      "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
+                      "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
+                      "가족돌봄휴가", "가족돌봄휴직", "휴직"
                   ],
                   "exclude_keywords": []
               }
@@ -165,10 +158,10 @@ jobs:
 
           def tokenize_title(text):
               normalized = normalize_text(text)
-              return set(token for token in normalized.split() if len(token) >= 2)
+              return set([token for token in normalized.split() if len(token) >= 2])
 
           def is_similar_title(normalized_title, seen_title_tokens_list, threshold=3):
-              current_tokens = set(token for token in normalized_title.split() if len(token) >= 2)
+              current_tokens = set([token for token in normalized_title.split() if len(token) >= 2])
               if not current_tokens:
                   return False
               for seen_tokens in seen_title_tokens_list:
@@ -215,6 +208,7 @@ jobs:
                       return -1
 
               score = 0
+
               for keyword in must_keywords:
                   kw = keyword.lower()
                   if kw in title_n:
@@ -226,8 +220,10 @@ jobs:
 
           def collect_category_news(category, global_seen_links, global_seen_titles, global_seen_title_tokens):
               candidates = []
+              per_query_counts = {}
 
               for query in category["queries"]:
+                  per_query_counts[query] = 0
                   items = search_news(query, display=30)
 
                   for item in items:
@@ -282,15 +278,13 @@ jobs:
               )
 
               selected = []
-              per_query_counts = {}
               max_items = category["max_items"]
               max_per_query = category.get("max_per_query", max_items)
 
               for item in candidates:
                   query = item["query"]
-                  current_count = per_query_counts.get(query, 0)
 
-                  if current_count >= max_per_query:
+                  if per_query_counts.get(query, 0) >= max_per_query:
                       continue
 
                   if item["link"] in global_seen_links:
@@ -307,7 +301,7 @@ jobs:
                       global_seen_titles.add(item["normalized_title"])
                       global_seen_title_tokens.append(item["title_tokens"])
 
-                  per_query_counts[query] = current_count + 1
+                  per_query_counts[query] = per_query_counts.get(query, 0) + 1
 
                   selected.append({
                       "title": item["title"],
@@ -322,51 +316,65 @@ jobs:
 
               return selected
 
-          def build_category_text(category):
-              if not category["items"]:
-                  return f"*{category['emoji']} {category['title']}* (0건)\n전날 기준 관련 뉴스를 찾지 못했어요."
-
-              lines = [f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"]
-              for idx, item in enumerate(category["items"], start=1):
-                  lines.append(
-                      f"*{idx}. <{item['link']}|{item['title']}>*\n"
-                      f"{item['desc']}\n"
-                      f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
-                  )
-              return "\n\n".join(lines)
-
           def build_blocks(results_by_category):
-              blocks = [
-                  {
-                      "type": "header",
-                      "text": {
-                          "type": "plain_text",
-                          "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
-                      }
-                  },
-                  {
-                      "type": "section",
-                      "text": {
-                          "type": "mrkdwn",
-                          "text": (
-                              f"*{report_date_text} 작성 기사 기준*으로 "
-                              f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
-                          )
-                      }
-                  },
-                  {"type": "divider"}
-              ]
+              blocks = []
 
-              for idx, category in enumerate(results_by_category):
+              blocks.append({
+                  "type": "header",
+                  "text": {
+                      "type": "plain_text",
+                      "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
+                  }
+              })
+
+              blocks.append({
+                  "type": "section",
+                  "text": {
+                      "type": "mrkdwn",
+                      "text": (
+                          f"*{report_date_text} 작성 기사 기준*으로 "
+                          f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
+                      )
+                  }
+              })
+
+              blocks.append({"type": "divider"})
+
+              for category in results_by_category:
                   blocks.append({
                       "type": "section",
                       "text": {
                           "type": "mrkdwn",
-                          "text": build_category_text(category)
+                          "text": f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"
                       }
                   })
-                  if idx < len(results_by_category) - 1:
+
+                  if not category["items"]:
+                      blocks.append({
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": "전날 기준 관련 뉴스를 찾지 못했어요."
+                          }
+                      })
                       blocks.append({"type": "divider"})
+                      continue
+
+                  for idx, item in enumerate(category["items"], start=1):
+                      block_text = (
+                          f"*{idx}. <{item['link']}|{item['title']}>*\n"
+                          f"{item['desc']}\n"
+                          f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
+                      )
+                      blocks.append({
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": block_text
+                          }
+                      })
+
+                  blocks.append({"type": "divider"})
 
               blocks.append({
                   "type": "context",
