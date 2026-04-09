@@ -322,65 +322,51 @@ jobs:
 
               return selected
 
+          def build_category_text(category):
+              if not category["items"]:
+                  return f"*{category['emoji']} {category['title']}* (0건)\n전날 기준 관련 뉴스를 찾지 못했어요."
+
+              lines = [f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"]
+              for idx, item in enumerate(category["items"], start=1):
+                  lines.append(
+                      f"*{idx}. <{item['link']}|{item['title']}>*\n"
+                      f"{item['desc']}\n"
+                      f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
+                  )
+              return "\n\n".join(lines)
+
           def build_blocks(results_by_category):
-              blocks = []
+              blocks = [
+                  {
+                      "type": "header",
+                      "text": {
+                          "type": "plain_text",
+                          "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
+                      }
+                  },
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": (
+                              f"*{report_date_text} 작성 기사 기준*으로 "
+                              f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
+                          )
+                      }
+                  },
+                  {"type": "divider"}
+              ]
 
-              blocks.append({
-                  "type": "header",
-                  "text": {
-                      "type": "plain_text",
-                      "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
-                  }
-              })
-
-              blocks.append({
-                  "type": "section",
-                  "text": {
-                      "type": "mrkdwn",
-                      "text": (
-                          f"*{report_date_text} 작성 기사 기준*으로 "
-                          f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
-                      )
-                  }
-              })
-
-              blocks.append({"type": "divider"})
-
-              for category in results_by_category:
+              for idx, category in enumerate(results_by_category):
                   blocks.append({
                       "type": "section",
                       "text": {
                           "type": "mrkdwn",
-                          "text": f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"
+                          "text": build_category_text(category)
                       }
                   })
-
-                  if not category["items"]:
-                      blocks.append({
-                          "type": "section",
-                          "text": {
-                              "type": "mrkdwn",
-                              "text": "전날 기준 관련 뉴스를 찾지 못했어요."
-                          }
-                      })
+                  if idx < len(results_by_category) - 1:
                       blocks.append({"type": "divider"})
-                      continue
-
-                  for idx, item in enumerate(category["items"], start=1):
-                      block_text = (
-                          f"*{idx}. <{item['link']}|{item['title']}>*\n"
-                          f"{item['desc']}\n"
-                          f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
-                      )
-                      blocks.append({
-                          "type": "section",
-                          "text": {
-                              "type": "mrkdwn",
-                              "text": block_text
-                          }
-                      })
-
-                  blocks.append({"type": "divider"})
 
               blocks.append({
                   "type": "context",
