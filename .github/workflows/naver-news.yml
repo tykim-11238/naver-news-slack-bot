@@ -109,7 +109,7 @@ jobs:
               {
                   "title": "휴직·모성보호",
                   "emoji": "👶",
-                  "max_items": 5,
+                  "max_items": 15,
                   "max_per_query": 2,
                   "queries": [
                       "육아휴직",
