@@ -1,446 +1,405 @@
-import os
-import re
-import json
-import html
-import urllib.parse
-import urllib.request
-from difflib import SequenceMatcher
-from datetime import datetime, timedelta, timezone
-
-NAVER_CLIENT_ID = os.environ["NAVER_CLIENT_ID"]
-NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
-
-KST = timezone(timedelta(hours=9))
-now_kst = datetime.now(KST)
-target_date = (now_kst - timedelta(days=1)).date()
-report_date_text = target_date.strftime("%Y-%m-%d")
-
-target_start = datetime.combine(target_date, datetime.min.time(), tzinfo=KST)
-target_end = datetime.combine(target_date, datetime.max.time(), tzinfo=KST)
-
-CATEGORIES = [
-    {
-        "title": "게임회사 동향",
-        "emoji": "🎮",
-        "max_items": 15,
-        "queries": [
-            "국내 게임업계 동향",
-            "국내 상장 게임사",
-            "게임사 실적",
-            "게임사 신작",
-            "게임사 투자",
-            "게임산업 정책",
-            "넥슨",
-            "넷마블",
-            "엔씨소프트",
-            "크래프톤",
-            "카카오게임즈",
-            "시프트업",
-            "펄어비스",
-            "컴투스"
-        ],
-        "must_keywords": [
-            "게임", "게임사", "게임업계", "상장", "실적", "신작", "출시",
-            "투자", "인수", "합병", "규제", "정책",
-            "넥슨", "넷마블", "엔씨소프트", "크래프톤", "카카오게임즈",
-            "시프트업", "펄어비스", "컴투스", "웹젠", "네오위즈",
-            "스마일게이트", "데브시스터즈", "엠게임", "미투온", "베이글코드"
-        ],
-        "exclude_keywords": [
-            "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
-            "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
-            "가족돌봄휴가", "가족돌봄휴직", "휴직"
-        ]
-    },
-    {
-        "title": "노동 일반",
-        "emoji": "⚖️",
-        "max_items": 15,
-        "queries": [
-            "노동법개정",
-            "근로기준법 개정",
-            "고용노동부",
-            "유연근무",
-            "주52시간",
-            "노동 판례",
-            "부당해고",
-            "포괄임금",
-            "게임업계 노동",
-            "IT업계 노동"
-        ],
-        "must_keywords": [
-            "노동", "근로", "고용", "임금", "해고", "판례", "근로기준법",
-            "고용노동부", "유연근무", "주52시간", "포괄임금", "노사"
-        ],
-        "exclude_keywords": [
-            "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
-            "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
-            "가족돌봄휴가", "가족돌봄휴직"
-        ]
-    },
-    {
-        "title": "휴직·모성보호",
-        "emoji": "👶",
-        "max_items": 5,
-        "queries": [
-            "육아휴직",
-            "모성보호",
-            "출산휴가",
-            "배우자출산휴가",
-            "출산전후휴가",
-            "임신기 근로시간 단축",
-            "난임치료휴가",
-            "가족돌봄휴가",
-            "가족돌봄휴직",
-            "휴직"
-        ],
-        "must_keywords": [
-            "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
-            "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
-            "가족돌봄휴가", "가족돌봄휴직", "휴직"
-        ],
-        "exclude_keywords": []
-    }
-]
-
-def request_json(url, headers=None):
-    req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-def clean_text(text):
-    if not text:
-        return ""
-    text = html.unescape(text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-def shorten(text, limit=90):
-    if len(text) <= limit:
-        return text
-    return text[:limit - 3] + "..."
-
-def normalize_text(text):
-    text = clean_text(text).lower()
-    text = re.sub(r"[^0-9a-zA-Z가-힣\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-def normalize_title_for_dedupe(title):
-    title = normalize_text(title)
-
-    # 자주 붙는 불필요 표현 제거
-    noise_patterns = [
-        r"\b단독\b",
-        r"\b종합\b",
-        r"\b속보\b",
-        r"\b인터뷰\b",
-        r"\b기획\b",
-        r"\b영상\b",
-        r"\b포토\b",
-        r"\b뉴스\b",
-        r"\[.*?\]",
-        r"\(.*?\)"
-    ]
-    for pattern in noise_patterns:
-        title = re.sub(pattern, " ", title)
-
-    # 조사/연결어 정도는 크게 의미 없으니 공백 정리
-    title = re.sub(r"\s+", " ", title).strip()
-    return title
-
-def parse_pubdate(pubdate_str):
-    try:
-        dt = datetime.strptime(pubdate_str, "%a, %d %b %Y %H:%M:%S %z")
-        return dt.astimezone(KST)
-    except Exception:
-        return None
-
-def is_target_date(pubdate_str):
-    dt = parse_pubdate(pubdate_str)
-    if not dt:
-        return False
-    return target_start <= dt <= target_end
-
-def search_news(query, display=30):
-    encoded_query = urllib.parse.quote(query)
-    url = (
-        "https://openapi.naver.com/v1/search/news.json"
-        f"?query={encoded_query}&display={display}&start=1&sort=date"
-    )
-    headers = {
-        "X-Naver-Client-Id": NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-    }
-    data = request_json(url, headers)
-    return data.get("items", [])
-
-def is_similar_title(title_a, title_b, threshold=0.88):
-    if not title_a or not title_b:
-        return False
-
-    if title_a == title_b:
-        return True
-
-    ratio = SequenceMatcher(None, title_a, title_b).ratio()
-    if ratio >= threshold:
-        return True
-
-    tokens_a = set(title_a.split())
-    tokens_b = set(title_b.split())
-
-    if not tokens_a or not tokens_b:
-        return False
-
-    intersection = len(tokens_a & tokens_b)
-    smaller = min(len(tokens_a), len(tokens_b))
-    if smaller > 0 and (intersection / smaller) >= 0.8:
-        return True
-
-    return False
-
-def is_duplicate_article(link, normalized_title, global_seen_links, global_seen_titles):
-    if link in global_seen_links:
-        return True
-
-    if normalized_title in global_seen_titles:
-        return True
-
-    for seen_title in global_seen_titles:
-        if is_similar_title(normalized_title, seen_title):
-            return True
-
-    return False
-
-def score_article(category, title, desc):
-    full_text = f"{title} {desc}"
-    title_n = normalize_text(title)
-    full_n = normalize_text(full_text)
-
-    must_keywords = category.get("must_keywords", [])
-    exclude_keywords = category.get("exclude_keywords", [])
-
-    for keyword in exclude_keywords:
-        if keyword.lower() in full_n:
-            return -1
-
-    score = 0
-
-    for keyword in must_keywords:
-        kw = keyword.lower()
-        if kw in title_n:
-            score += 3
-        elif kw in full_n:
-            score += 1
-
-    return score
-
-def collect_category_news(category, global_seen_links, global_seen_titles):
-    candidates = []
-
-    for query in category["queries"]:
-        items = search_news(query, display=30)
-
-        for item in items:
-            title = clean_text(item.get("title", ""))
-            desc = clean_text(item.get("description", ""))
-            link = item.get("originallink") or item.get("link") or ""
-            pubdate_str = item.get("pubDate", "")
-
-            if not title or not link:
-                continue
-
-            if not is_target_date(pubdate_str):
-                continue
-
-            normalized_title = normalize_title_for_dedupe(title)
-
-            if is_duplicate_article(link, normalized_title, global_seen_links, global_seen_titles):
-                continue
-
-            score = score_article(category, title, desc)
-            if score <= 0:
-                continue
-
-            pub_dt = parse_pubdate(pubdate_str)
-            pub_text = pub_dt.strftime("%Y-%m-%d %H:%M") if pub_dt else ""
-
-            candidates.append({
-                "title": title,
-                "desc": shorten(desc, 90),
-                "link": link,
-                "query": query,
-                "pub_text": pub_text,
-                "pub_dt": pub_dt,
-                "score": score,
-                "normalized_title": normalized_title
-            })
-
-    # 후보군 내부에서도 유사 제목 한 번 더 정리
-    deduped_candidates = []
-    local_seen_titles = []
-
-    candidates = sorted(
-        candidates,
-        key=lambda x: (x["score"], x["pub_dt"] or datetime.min.replace(tzinfo=KST)),
-        reverse=True
-    )
-
-    for item in candidates:
-        dup = False
-        for seen_title in local_seen_titles:
-            if is_similar_title(item["normalized_title"], seen_title):
-                dup = True
-                break
-
-        if dup:
-            continue
-
-        local_seen_titles.append(item["normalized_title"])
-        deduped_candidates.append(item)
-
-    selected = []
-    max_items = category["max_items"]
-
-    for item in deduped_candidates:
-        if is_duplicate_article(item["link"], item["normalized_title"], global_seen_links, global_seen_titles):
-            continue
-
-        global_seen_links.add(item["link"])
-        global_seen_titles.add(item["normalized_title"])
-
-        selected.append({
-            "title": item["title"],
-            "desc": item["desc"],
-            "link": item["link"],
-            "query": item["query"],
-            "pub_text": item["pub_text"]
-        })
-
-        if len(selected) >= max_items:
-            break
-
-    return selected
-
-def build_blocks(results_by_category):
-    blocks = []
-
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
-        }
-    })
-
-    blocks.append({
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": (
-                f"*{report_date_text} 작성 기사 기준*으로 "
-                f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
-            )
-        }
-    })
-
-    blocks.append({"type": "divider"})
-
-    for category in results_by_category:
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"
-            }
-        })
-
-        if not category["items"]:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "전날 기준 관련 뉴스를 찾지 못했어요."
-                }
-            })
-            blocks.append({"type": "divider"})
-            continue
-
-        for idx, item in enumerate(category["items"], start=1):
-            block_text = (
-                f"*{idx}. <{item['link']}|{item['title']}>*\n"
-                f"{item['desc']}\n"
-                f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
-            )
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": block_text
-                }
-            })
-
-        blocks.append({"type": "divider"})
-
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": "GitHub Actions + Naver Search API 자동 발송"
-            }
-        ]
-    })
-
-    return blocks
-
-global_seen_links = set()
-global_seen_titles = set()
-results_by_category = []
-
-for category in CATEGORIES:
-    items = collect_category_news(category, global_seen_links, global_seen_titles)
-    results_by_category.append({
-        "title": category["title"],
-        "emoji": category["emoji"],
-        "items": items
-    })
-
-fallback_lines = [f"전날 뉴스 브리핑 | {report_date_text}"]
-for category in results_by_category:
-    fallback_lines.append(f"[{category['title']}]")
-    if not category["items"]:
-        fallback_lines.append("- 전날 기준 관련 뉴스 없음")
-    else:
-        for idx, item in enumerate(category["items"], start=1):
-            fallback_lines.append(
-                f"{idx}. {item['title']} ({item['pub_text']}) - {item['link']}"
-            )
-    fallback_lines.append("")
-
-payload = {
-    "channel": SLACK_CHANNEL_ID,
-    "text": "\n".join(fallback_lines),
-    "blocks": build_blocks(results_by_category)
-}
-
-req = urllib.request.Request(
-    "https://slack.com/api/chat.postMessage",
-    data=json.dumps(payload).encode("utf-8"),
-    headers={
-        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-        "Content-Type": "application/json; charset=utf-8"
-    },
-    method="POST"
-)
-
-with urllib.request.urlopen(req) as resp:
-    result = json.loads(resp.read().decode("utf-8"))
-
-if not result.get("ok"):
-    raise RuntimeError(f"Slack send failed: {result}")
-
-print("슬랙 전송 성공")
+name: Naver News to Slack
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "10 1 * * *"
+
+jobs:
+  send-news:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send categorized Naver News to Slack
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: |
+          python <<'PY'
+          import os
+          import re
+          import json
+          import html
+          import urllib.parse
+          import urllib.request
+          from datetime import datetime, timedelta, timezone
+
+          NAVER_CLIENT_ID = os.environ["NAVER_CLIENT_ID"]
+          NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+          SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+          SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
+
+          KST = timezone(timedelta(hours=9))
+          now_kst = datetime.now(KST)
+          target_date = (now_kst - timedelta(days=1)).date()
+          report_date_text = target_date.strftime("%Y-%m-%d")
+
+          target_start = datetime.combine(target_date, datetime.min.time(), tzinfo=KST)
+          target_end = datetime.combine(target_date, datetime.max.time(), tzinfo=KST)
+
+          CATEGORIES = [
+              {
+                  "title": "게임회사 동향",
+                  "emoji": "🎮",
+                  "max_items": 15,
+                  "queries": [
+                      "국내 게임업계 동향",
+                      "국내 상장 게임사",
+                      "넥슨",
+                      "넷마블",
+                      "엔씨소프트",
+                      "크래프톤",
+                      "카카오게임즈",
+                      "시프트업",
+                      "펄어비스",
+                      "컴투스",
+                      "웹젠",
+                      "네오위즈",
+                      "스마일게이트",
+                      "데브시스터즈",
+                      "엠게임",
+                      "미투온",
+                      "베이글코드"
+                  ],
+                  "must_keywords": [
+                      "게임", "게임사", "게임업계", "상장", "실적", "신작", "출시",
+                      "투자", "인수", "합병", "규제", "정책", "개발", "출시", "론칭",
+                      "넥슨", "넷마블", "엔씨소프트", "크래프톤", "카카오게임즈",
+                      "시프트업", "펄어비스", "컴투스", "웹젠", "네오위즈",
+                      "스마일게이트", "데브시스터즈", "엠게임", "미투온", "베이글코드"
+                  ],
+                  "exclude_keywords": [
+                      "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
+                      "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
+                      "가족돌봄휴가", "가족돌봄휴직", "휴직"
+                  ]
+              },
+              {
+                  "title": "노동 일반",
+                  "emoji": "⚖️",
+                  "max_items": 15,
+                  "queries": [
+                      "노동법개정",
+                      "노동법 개정",
+                      "근로기준법 개정",
+                      "고용노동부",
+                      "유연근무",
+                      "주52시간",
+                      "노동 판례",
+                      "부당해고",
+                      "포괄임금",
+                      "게임업계 노동",
+                      "IT업계 노동"
+                  ],
+                  "must_keywords": [
+                      "노동", "근로", "고용", "임금", "해고", "판례", "근로기준법",
+                      "고용노동부", "유연근무", "주52시간", "포괄임금", "노사",
+                      "취업규칙", "근무제도", "연장근로", "통상임금"
+                  ],
+                  "exclude_keywords": [
+                      "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
+                      "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
+                      "가족돌봄휴가", "가족돌봄휴직"
+                  ]
+              },
+              {
+                  "title": "휴직·모성보호",
+                  "emoji": "👶",
+                  "max_items": 5,
+                  "queries": [
+                      "육아휴직",
+                      "모성보호",
+                      "출산휴가",
+                      "배우자출산휴가",
+                      "출산전후휴가",
+                      "임신기 근로시간 단축",
+                      "난임치료휴가",
+                      "가족돌봄휴가",
+                      "가족돌봄휴직",
+                      "휴직"
+                  ],
+                  "must_keywords": [
+                      "육아휴직", "모성보호", "출산휴가", "배우자출산휴가",
+                      "출산전후휴가", "임신기 근로시간 단축", "난임치료휴가",
+                      "가족돌봄휴가", "가족돌봄휴직", "휴직"
+                  ],
+                  "exclude_keywords": []
+              }
+          ]
+
+          def request_json(url, headers=None):
+              req = urllib.request.Request(url, headers=headers or {})
+              with urllib.request.urlopen(req) as resp:
+                  return json.loads(resp.read().decode("utf-8"))
+
+          def clean_text(text):
+              if not text:
+                  return ""
+              text = html.unescape(text)
+              text = re.sub(r"<[^>]+>", "", text)
+              text = re.sub(r"\s+", " ", text).strip()
+              return text
+
+          def shorten(text, limit=90):
+              if len(text) <= limit:
+                  return text
+              return text[:limit - 3] + "..."
+
+          def normalize_text(text):
+              text = clean_text(text).lower()
+              text = re.sub(r"[^0-9a-zA-Z가-힣\s]", "", text)
+              text = re.sub(r"\s+", " ", text).strip()
+              return text
+
+          def parse_pubdate(pubdate_str):
+              try:
+                  dt = datetime.strptime(pubdate_str, "%a, %d %b %Y %H:%M:%S %z")
+                  return dt.astimezone(KST)
+              except Exception:
+                  return None
+
+          def is_target_date(pubdate_str):
+              dt = parse_pubdate(pubdate_str)
+              if not dt:
+                  return False
+              return target_start <= dt <= target_end
+
+          def search_news(query, display=30):
+              encoded_query = urllib.parse.quote(query)
+              url = (
+                  "https://openapi.naver.com/v1/search/news.json"
+                  f"?query={encoded_query}&display={display}&start=1&sort=date"
+              )
+              headers = {
+                  "X-Naver-Client-Id": NAVER_CLIENT_ID,
+                  "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+              }
+              data = request_json(url, headers)
+              return data.get("items", [])
+
+          def score_article(category, title, desc):
+              full_text = f"{title} {desc}"
+              title_n = normalize_text(title)
+              full_n = normalize_text(full_text)
+
+              must_keywords = category.get("must_keywords", [])
+              exclude_keywords = category.get("exclude_keywords", [])
+
+              for keyword in exclude_keywords:
+                  if keyword.lower() in full_n:
+                      return -1
+
+              score = 0
+
+              for keyword in must_keywords:
+                  kw = keyword.lower()
+                  if kw in title_n:
+                      score += 3
+                  elif kw in full_n:
+                      score += 1
+
+              return score
+
+          def collect_category_news(category, global_seen_links, global_seen_titles):
+              candidates = []
+
+              for query in category["queries"]:
+                  items = search_news(query, display=30)
+
+                  for item in items:
+                      title = clean_text(item.get("title", ""))
+                      desc = clean_text(item.get("description", ""))
+                      link = item.get("originallink") or item.get("link") or ""
+                      pubdate_str = item.get("pubDate", "")
+
+                      if not title or not link:
+                          continue
+
+                      if not is_target_date(pubdate_str):
+                          continue
+
+                      normalized_title = normalize_text(title)
+
+                      if link in global_seen_links:
+                          continue
+
+                      if normalized_title and normalized_title in global_seen_titles:
+                          continue
+
+                      score = score_article(category, title, desc)
+                      if score <= 0:
+                          continue
+
+                      pub_dt = parse_pubdate(pubdate_str)
+                      pub_text = pub_dt.strftime("%Y-%m-%d %H:%M") if pub_dt else ""
+
+                      candidates.append({
+                          "title": title,
+                          "desc": shorten(desc, 90),
+                          "link": link,
+                          "query": query,
+                          "pub_text": pub_text,
+                          "score": score,
+                          "normalized_title": normalized_title
+                      })
+
+              candidates = sorted(
+                  candidates,
+                  key=lambda x: (
+                      -x["score"],
+                      x["pub_text"],
+                      x["title"]
+                  ),
+                  reverse=False
+              )
+
+              selected = []
+              max_items = category["max_items"]
+
+              for item in candidates:
+                  if item["link"] in global_seen_links:
+                      continue
+
+                  if item["normalized_title"] and item["normalized_title"] in global_seen_titles:
+                      continue
+
+                  global_seen_links.add(item["link"])
+                  if item["normalized_title"]:
+                      global_seen_titles.add(item["normalized_title"])
+
+                  selected.append({
+                      "title": item["title"],
+                      "desc": item["desc"],
+                      "link": item["link"],
+                      "query": item["query"],
+                      "pub_text": item["pub_text"]
+                  })
+
+                  if len(selected) >= max_items:
+                      break
+
+              return selected
+
+          def build_blocks(results_by_category):
+              blocks = []
+
+              blocks.append({
+                  "type": "header",
+                  "text": {
+                      "type": "plain_text",
+                      "text": f"📰 전날 뉴스 브리핑 | {report_date_text}"
+                  }
+              })
+
+              blocks.append({
+                  "type": "section",
+                  "text": {
+                      "type": "mrkdwn",
+                      "text": (
+                          f"*{report_date_text} 작성 기사 기준*으로 "
+                          f"*게임회사 동향*, *노동 일반*, *휴직·모성보호* 뉴스를 정리했어요."
+                      )
+                  }
+              })
+
+              blocks.append({"type": "divider"})
+
+              for category in results_by_category:
+                  blocks.append({
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"*{category['emoji']} {category['title']}* ({len(category['items'])}건)"
+                      }
+                  })
+
+                  if not category["items"]:
+                      blocks.append({
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": "전날 기준 관련 뉴스를 찾지 못했어요."
+                          }
+                      })
+                      blocks.append({"type": "divider"})
+                      continue
+
+                  for idx, item in enumerate(category["items"], start=1):
+                      block_text = (
+                          f"*{idx}. <{item['link']}|{item['title']}>*\n"
+                          f"{item['desc']}\n"
+                          f"`작성시각: {item['pub_text']}` | `검색어: {item['query']}`"
+                      )
+                      blocks.append({
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": block_text
+                          }
+                      })
+
+                  blocks.append({"type": "divider"})
+
+              blocks.append({
+                  "type": "context",
+                  "elements": [
+                      {
+                          "type": "mrkdwn",
+                          "text": "GitHub Actions + Naver Search API 자동 발송"
+                      }
+                  ]
+              })
+
+              return blocks
+
+          global_seen_links = set()
+          global_seen_titles = set()
+          results_by_category = []
+
+          for category in CATEGORIES:
+              items = collect_category_news(category, global_seen_links, global_seen_titles)
+              results_by_category.append({
+                  "title": category["title"],
+                  "emoji": category["emoji"],
+                  "items": items
+              })
+
+          fallback_lines = [f"전날 뉴스 브리핑 | {report_date_text}"]
+
+          for category in results_by_category:
+              fallback_lines.append(f"[{category['title']}]")
+              if not category["items"]:
+                  fallback_lines.append("- 전날 기준 관련 뉴스 없음")
+              else:
+                  for idx, item in enumerate(category["items"], start=1):
+                      fallback_lines.append(
+                          f"{idx}. {item['title']} ({item['pub_text']}) - {item['link']}"
+                      )
+              fallback_lines.append("")
+
+          payload = {
+              "channel": SLACK_CHANNEL_ID,
+              "text": "\n".join(fallback_lines),
+              "blocks": build_blocks(results_by_category)
+          }
+
+          req = urllib.request.Request(
+              "https://slack.com/api/chat.postMessage",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+                  "Content-Type": "application/json; charset=utf-8"
+              },
+              method="POST"
+          )
+
+          with urllib.request.urlopen(req) as resp:
+              result = json.loads(resp.read().decode("utf-8"))
+
+          if not result.get("ok"):
+              raise RuntimeError(f"Slack send failed: {result}")
+
+          print("슬랙 전송 성공")
+          PY
