@@ -3,7 +3,7 @@ name: Naver News to Slack
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "7 2 * * *"
 
 jobs:
   send-news:
