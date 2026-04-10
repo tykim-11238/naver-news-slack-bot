@@ -3,13 +3,20 @@ name: Naver News to Slack
 on:
   workflow_dispatch:
   schedule:
-    - cron: "56 1 * * *"
+    - cron: "19 2 * * *"
 
 jobs:
   send-news:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Debug current time
+        run: |
+          echo "Local runner time:"
+          date
+          echo "UTC time:"
+          date -u
+
       - name: Send categorized Naver News to Slack
         env:
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
@@ -38,6 +45,11 @@ jobs:
 
           target_start = datetime.combine(target_date, datetime.min.time(), tzinfo=KST)
           target_end = datetime.combine(target_date, datetime.max.time(), tzinfo=KST)
+
+          print(f"now_kst: {now_kst}")
+          print(f"report_date_text: {report_date_text}")
+          print(f"target_start: {target_start}")
+          print(f"target_end: {target_end}")
 
           CATEGORIES = [
               {
@@ -432,6 +444,9 @@ jobs:
                   "items": items
               })
 
+          for category in results_by_category:
+              print(f"{category['title']} 기사 수: {len(category['items'])}")
+
           fallback_lines = [f"전날 뉴스 브리핑 | {report_date_text}"]
 
           for category in results_by_category:
@@ -466,6 +481,8 @@ jobs:
 
           with urllib.request.urlopen(req) as resp:
               result = json.loads(resp.read().decode("utf-8"))
+
+          print("Slack API 응답:", json.dumps(result, ensure_ascii=False))
 
           if not result.get("ok"):
               raise RuntimeError(f"Slack send failed: {result}")
