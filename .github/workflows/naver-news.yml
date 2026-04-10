@@ -1,4 +1,3 @@
-# schedule refresh test
 name: Naver News to Slack
 
 on:
