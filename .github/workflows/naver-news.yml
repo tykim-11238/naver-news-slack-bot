@@ -465,7 +465,7 @@ jobs:
 
           payload = {
               "channel": SLACK_CHANNEL_ID,
-              "text": f"테스트 메시지: GitHub Actions 수동 실행 확인 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}"
+              "text": "\n".join(fallback_lines[:120]),
 
           req = urllib.request.Request(
               "https://slack.com/api/chat.postMessage",
