@@ -466,7 +466,7 @@ jobs:
           payload = {
               "channel": SLACK_CHANNEL_ID,
               "text": "\n".join(fallback_lines[:120]),
-
+          }
           req = urllib.request.Request(
               "https://slack.com/api/chat.postMessage",
               data=json.dumps(payload).encode("utf-8"),
