@@ -3,7 +3,7 @@ name: Naver News to Slack
 on:
   workflow_dispatch:
   schedule:
-    - cron: "5 4 * * *"
+    - cron: "19 2 * * *"
 
 jobs:
   send-news:
@@ -466,7 +466,9 @@ jobs:
           payload = {
               "channel": SLACK_CHANNEL_ID,
               "text": "\n".join(fallback_lines[:120]),
+              "blocks": blocks
           }
+
           req = urllib.request.Request(
               "https://slack.com/api/chat.postMessage",
               data=json.dumps(payload).encode("utf-8"),
