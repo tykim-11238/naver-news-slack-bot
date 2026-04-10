@@ -3,7 +3,7 @@ name: Naver News to Slack
 on:
   workflow_dispatch:
   schedule:
-    - cron: "10 1 * * *"
+    - cron: "7 1 * * *"
 
 jobs:
   send-news:
@@ -43,7 +43,7 @@ jobs:
               {
                   "title": "게임회사 동향",
                   "emoji": "🎮",
-                  "max_items": 15,
+                  "max_items": 10,
                   "max_per_query": 2,
                   "queries": [
                       "국내 게임업계 동향",
@@ -80,7 +80,7 @@ jobs:
               {
                   "title": "노동 일반",
                   "emoji": "⚖️",
-                  "max_items": 15,
+                  "max_items": 10,
                   "max_per_query": 3,
                   "queries": [
                       "노동법개정",
@@ -109,7 +109,7 @@ jobs:
               {
                   "title": "휴직·모성보호",
                   "emoji": "👶",
-                  "max_items": 10,
+                  "max_items": 5,
                   "max_per_query": 2,
                   "queries": [
                       "휴직",
@@ -447,10 +447,13 @@ jobs:
                       )
               fallback_lines.append("")
 
+          blocks = build_blocks(results_by_category)
+          print(f"생성된 Slack block 수: {len(blocks)}")
+
           payload = {
               "channel": SLACK_CHANNEL_ID,
               "text": "\n".join(fallback_lines[:120]),
-              "blocks": build_blocks(results_by_category)
+              "blocks": blocks
           }
 
           req = urllib.request.Request(
